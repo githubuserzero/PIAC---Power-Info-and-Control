@@ -30,6 +30,14 @@ end
 
 local elapsed = 0
 local currenttime = 0
+local LIVE_REFRESH_TICKS = 6
+local handles = {
+    view = nil,
+    header = {},
+    nav = {},
+    footer = {},
+    overview = {},
+}
 
 -- ==================== CONSTANTS ====================
 
@@ -352,6 +360,16 @@ end
 local function push_history(buf, val)
     table.remove(buf, 1)
     buf[#buf + 1] = val
+end
+
+local function reset_handles()
+    handles = {
+        view = nil,
+        header = {},
+        nav = {},
+        footer = {},
+        overview = {},
+    }
 end
 
 -- ==================== INITIALIZATION ====================
@@ -748,8 +766,6 @@ local function mk1_find_daylight_sensor()
     return { prefab_hash = sel_ph, name_hash = sel_nh }
 end
 
--- Writes horizontal/vertical to solar panels.
--- Returns false if no solar panel device is selected.
 local function mk1_write_panels(horizontal, vertical)
     local h = wrap_degrees(horizontal)
     local v = math.max(0, math.min(180, tonumber(vertical) or 0))
@@ -760,7 +776,6 @@ local function mk1_write_panels(horizontal, vertical)
     return true
 end
 
--- Returns selected panel Ratio % (0 if no panel selected).
 local function mk1_max_panel_output_pct()
     local max_ratio = 0
     local sel = selected_prefab(MEM_PREFAB_SOLAR)
@@ -835,13 +850,13 @@ local dashboard_render
 local set_view
 
 local function render_header()
-    s:element({
+    local header = s:element({
         id = "header_bg",
         type = "panel",
         rect = { unit = "px", x = 0, y = 0, w = W, h = 30 },
         style = { bg = C.header }
     })
-    s:element({
+    header:element({
         id = "title",
         type = "label",
         rect = { unit = "px", x = 14, y = 6, w = 300, h = 20 },
@@ -851,13 +866,13 @@ local function render_header()
 
     local statTxt = status_text(solarPct)
     local statCol = status_color(solarPct)
-    s:element({
+    handles.header.status_dot = header:element({
         id = "status_dot",
         type = "panel",
         rect = { unit = "px", x = W - 90, y = 12, w = 6, h = 6 },
         style = { bg = statCol }
     })
-    s:element({
+    handles.header.status_label = header:element({
         id = "status_label",
         type = "label",
         rect = { unit = "px", x = W - 82, y = 7, w = 76, h = 18 },
@@ -875,7 +890,7 @@ local function render_nav_tabs()
 
     for i, tab in ipairs(tabs) do
         local is_active = (view == tab.view)
-        s:element({
+        handles.nav[tab.view] = s:element({
             id = tab.id,
             type = "button",
             rect = { unit = "px", x = (i - 1) * tab_w + 5, y = 34, w = tab_w - 4, h = 22 },
@@ -895,7 +910,7 @@ local function render_nav_tabs()
 end
 
 local function render_footer()
-    s:element({
+    local footer = s:element({
         id = "footer_bg",
         type = "panel",
         rect = { unit = "px", x = 0, y = H - 18, w = W, h = 18 },
@@ -904,20 +919,67 @@ local function render_footer()
     local gt  = util.game_time()
     local gtH = math.floor(gt / 3600)
     local gtM = math.floor((gt % 3600) / 60)
-    s:element({
+    handles.footer.left = footer:element({
         id = "footer_left",
         type = "label",
-        rect = { unit = "px", x = 8, y = H - 15, w = 120, h = 14 },
+        rect = { unit = "px", x = 8, y = 3, w = 120, h = 14 },
         props = { text = "Time: " .. currenttime },
         style = { font_size = 8, color = C.text_muted, align = "left" }
     })
-    s:element({
+    handles.footer.right = footer:element({
         id = "footer_right",
         type = "label",
-        rect = { unit = "px", x = W - 200, y = H - 15, w = 192, h = 14 },
+        rect = { unit = "px", x = W - 200, y = 3, w = 192, h = 14 },
         props = { text = string.format("Tick %.0f | ELAPSED %dh %02dm", math.floor(elapsed), gtH, gtM) },
         style = { font_size = 8, color = C.text_muted, align = "right" }
     })
+end
+
+local function update_header_dynamic()
+    local statTxt = status_text(solarPct)
+    local statCol = status_color(solarPct)
+    if handles.header.status_dot ~= nil then
+        handles.header.status_dot:set_style({ bg = statCol })
+    end
+    if handles.header.status_label ~= nil then
+        handles.header.status_label:set_props({ text = statTxt })
+        handles.header.status_label:set_style({ font_size = 11, color = statCol, align = "left" })
+    end
+end
+
+local function update_nav_dynamic()
+    if handles.nav.overview ~= nil then
+        local active = view == "overview"
+        handles.nav.overview:set_style({
+            bg = active and "#6844aa" or "#333344",
+            text = "#FFFFFF",
+            font_size = 11,
+            gradient = active and "#3b1f88" or "#1c1c2e",
+            gradient_dir = "vertical"
+        })
+    end
+    if handles.nav.settings ~= nil then
+        local active = view == "settings"
+        handles.nav.settings:set_style({
+            bg = active and "#6844aa" or "#333344",
+            text = "#FFFFFF",
+            font_size = 11,
+            gradient = active and "#3b1f88" or "#1c1c2e",
+            gradient_dir = "vertical"
+        })
+    end
+end
+
+local function update_footer_dynamic()
+    local gt  = util.game_time()
+    local gtH = math.floor(gt / 3600)
+    local gtM = math.floor((gt % 3600) / 60)
+    if handles.footer.left ~= nil then
+        handles.footer.left:set_props({ text = "Time: " .. currenttime })
+    end
+    if handles.footer.right ~= nil then
+        handles.footer.right:set_props({ text = string.format("Tick %.0f | ELAPSED %dh %02dm", math.floor(elapsed), gtH, gtM) })
+    end
 end
 
 -- ==================== OVERVIEW VIEW ====================
@@ -949,31 +1011,31 @@ local function render_overview()
     })
 
     local wind_panel_y = body_y + section_title_h
-    s:element({
+    local wind_panel = s:element({
         id = "wind_info_bg",
         type = "panel",
         rect = { unit = "px", x = left_x, y = wind_panel_y, w = col_w + 2, h = wind_panel_h + 5 },
         style = { bg = C.panel }
     })
     local windPct = windCount > 0 and math.min(100, (windPower / windMaxpower) * 100) or 0
-    s:element({
+    handles.overview.wind_count = wind_panel:element({
         id = "wind_count",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = wind_panel_y + 2, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 2, w = col_w - 14, h = 10 },
         props = { text = "Turbines: " .. windCount },
         style = { font_size = 9, color = C.text, align = "left" }
     })
-    s:element({
+    handles.overview.wind_generation = wind_panel:element({
         id = "wind_generation",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = wind_panel_y + 12, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 12, w = col_w - 14, h = 10 },
         props = { text = "Generation: " .. fmt_power(windPower) .. " / " .. fmt_power(windMaxpower) },
         style = { font_size = 9, color = C.text, align = "left" }
     })
-    s:element({
+    handles.overview.wind_pct = wind_panel:element({
         id = "wind_pct",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = wind_panel_y + 22, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 22, w = col_w - 14, h = 10 },
         props = { text = "Utilization: " .. fmt(windPct, 1) .. "%" },
         style = { font_size = 9, color = pct_color(windPct), align = "left" }
     })
@@ -989,37 +1051,37 @@ local function render_overview()
     })
 
     local solar_panel_y = solar_y + section_title_h
-    s:element({
+    local solar_panel = s:element({
         id = "solar_info_bg",
         type = "panel",
         rect = { unit = "px", x = left_x, y = solar_panel_y, w = col_w + 2, h = solar_panel_h + 5 },
         style = { bg = C.panel }
     })
-    s:element({
+    handles.overview.solar_count = solar_panel:element({
         id = "solar_count",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = solar_panel_y + 2, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 2, w = col_w - 14, h = 10 },
         props = { text = "Panels: " .. solarCount },
         style = { font_size = 9, color = C.text, align = "left" }
     })
-    s:element({
+    handles.overview.solar_tracker_status = solar_panel:element({
         id = "solar_tracker_status",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = solar_panel_y + 2, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 2, w = col_w - 14, h = 10 },
         props = { text = mk1_Enabled and "TRACK ON" or "TRACK OFF" },
         style = { font_size = 7, color = mk1_Enabled and C.green or C.red, align = "right" }
     })
-    s:element({
+    handles.overview.solar_generation = solar_panel:element({
         id = "solar_generation",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = solar_panel_y + 12, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 12, w = col_w - 14, h = 10 },
         props = { text = "Generation: " .. fmt_power(solarCharge) .. " / " .. fmt_power(solarMaxCharge) },
         style = { font_size = 9, color = C.text, align = "left" }
     })
-    s:element({
+    handles.overview.solar_pct = solar_panel:element({
         id = "solar_pct",
         type = "label",
-        rect = { unit = "px", x = left_x + 10, y = solar_panel_y + 22, w = col_w - 14, h = 10 },
+        rect = { unit = "px", x = 10, y = 22, w = col_w - 14, h = 10 },
         props = { text = "Utilization: " .. fmt(solarPct, 1) .. "%" },
         style = { font_size = 9, color = pct_color(solarPct), align = "left" }
     })
@@ -1045,28 +1107,28 @@ local function render_overview()
     local bat_bar_w = col_w - 36
     local bat_bar_x = left_x + 18
     local spark_h = math.max(6, bat_panel_h - 32)
-    s:element({
+    handles.overview.bat_pct = s:element({
         id = "bat_pct",
         type = "label",
         rect = { unit = "px", x = left_x + 8, y = bat_panel_y + 7, w = col_w - 16, h = 14 },
         props = { text = fmt(batPct, 1) .. "%" },
         style = { font_size = 16, color = pct_color(batPct), align = "center" }
     })
-    s:element({
+    handles.overview.bat_energy = s:element({
         id = "bat_energy",
         type = "label",
         rect = { unit = "px", x = left_x + 8, y = bat_panel_y + 20, w = col_w - 16, h = 8 },
         props = { text = fmt_energy(batCharge) .. " / " .. fmt_energy(batMax) },
         style = { font_size = 7, color = C.text_dim, align = "center" }
     })
-    s:element({
+    handles.overview.bat_progress = s:element({
         id = "bat_progress",
         type = "progress",
         rect = { unit = "px", x = bat_bar_x, y = bat_panel_y + 28, w = bat_bar_w, h = 6 },
         props = { value = batPct, max = "100" },
         style = { bg = "#1A2540", fill = pct_color(batPct) }
     })
-    s:element({
+    handles.overview.bat_sparkline = s:element({
         id = "bat_sparkline",
         type = "linechart",
         rect = { unit = "px", x = bat_bar_x - 25, y = bat_panel_y + 35, w = bat_bar_w + 20, h = spark_h },
@@ -1126,20 +1188,20 @@ local function render_overview()
     local solidRunning = (solidOnCount ~= nil and solidOnCount == solidOnCount) and solidOnCount or 0
     local sCountTxt = (solidTotal <= 0) and "No generators detected"
         or ("DETECTED: " .. solidTotal .. "  RUNNING: " .. solidRunning)
-    s:element({
+    handles.overview.solid_count_lbl = s:element({
         id = "solid_count_lbl",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 8, y = solid_panel_y + 4, w = right_panel_w - 56, h = 10 },
         props = { text = sCountTxt },
         style = { font_size = 8, color = C.text, align = "left" }
     })
-    s:element({
+    handles.overview.solid_status_dot = s:element({
         id = "solid_status_dot",
         type = "panel",
         rect = { unit = "px", x = right_panel_x + right_panel_w - 45, y = solid_panel_y + 6, w = 5, h = 5 },
         style = { bg = sDisplayActive and C.gen_on or C.gen_off }
     })
-    s:element({
+    handles.overview.solid_status_txt = s:element({
         id = "solid_status_txt",
         type = "label",
         rect = { unit = "px", x = right_panel_x + right_panel_w - 37, y = solid_panel_y + 4, w = 30, h = 10 },
@@ -1154,7 +1216,7 @@ local function render_overview()
         props = { text = "Output:" },
         style = { font_size = 8, color = C.text_dim, align = "left" }
     })
-    s:element({
+    handles.overview.solid_power_val = s:element({
         id = "solid_power_val",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 54, y = solid_panel_y + 18, w = right_panel_w - 62, h = 10 },
@@ -1168,14 +1230,14 @@ local function render_overview()
         solidSlot = batch_read_slot(solidPrefab, 0, LST.Quantity, LBM.Sum) or 0
     end
     local solidgenPct = math.min(100, (solidSlot / 1000) * 100)
-    s:element({
+    handles.overview.solid_debug = s:element({
         id = "solid_debug",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 8, y = solid_panel_y + 32, w = right_panel_w - meter_w - 20, h = 10 },
         props = { text = "Input Quantity: " .. fmt(solidSlot, 0) },
         style = { font_size = 8, color = C.text_dim, align = "left" }
     })
-    s:element({
+    handles.overview.solid_gas_bar = s:element({
         id = "solid_gas_bar",
         type = "progress",
         rect = { unit = "px", x = meter_x - 15, y = solid_panel_y + 33, w = meter_w + 20, h = 8 },
@@ -1188,7 +1250,7 @@ local function render_overview()
     local btn_pad = 14
     local btn_w = math.floor((right_panel_w - (btn_pad * 2) - (btn_gap * 2)) / 3)
     local btn_y = solid_panel_y + solid_panel_h - btn_h - 2
-    s:element({
+    handles.overview.solid_btn_on = s:element({
         id = "solid_btn_on",
         type = "button",
         rect = { unit = "px", x = right_panel_x + btn_pad, y = btn_y - 30, w = btn_w, h = btn_h },
@@ -1197,10 +1259,10 @@ local function render_overview()
         on_click = function()
             solidForceState = true
             save_force_states()
-            dashboard_render()
+            dashboard_render(false)
         end
     })
-    s:element({
+    handles.overview.solid_btn_off = s:element({
         id = "solid_btn_off",
         type = "button",
         rect = { unit = "px", x = right_panel_x + btn_pad + btn_w + btn_gap, y = btn_y - 30, w = btn_w, h = btn_h },
@@ -1209,10 +1271,10 @@ local function render_overview()
         on_click = function()
             solidForceState = false
             save_force_states()
-            dashboard_render()
+            dashboard_render(false)
         end
     })
-    s:element({
+    handles.overview.solid_btn_auto = s:element({
         id = "solid_btn_auto",
         type = "button",
         rect = { unit = "px", x = right_panel_x + btn_pad + (btn_w + btn_gap) * 2, y = btn_y - 30, w = btn_w, h = btn_h },
@@ -1221,7 +1283,7 @@ local function render_overview()
         on_click = function()
             solidForceState = nil
             save_force_states()
-            dashboard_render()
+            dashboard_render(false)
         end
     })
 
@@ -1245,20 +1307,20 @@ local function render_overview()
     local gDisplayActive = gasForceState ~= nil and gasForceState or (gasOnCount > 0)
     local gCountTxt = gasCount == 0 and "No generators detected"
         or ("DETECTED: " .. (gasCount or "none") .. "  RUNNING: " .. (gasOnCount or "none"))
-    s:element({
+    handles.overview.gas_count_lbl = s:element({
         id = "gas_count_lbl",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 8, y = gas_panel_y + 4, w = right_panel_w - 56, h = 10 },
         props = { text = gCountTxt },
         style = { font_size = 8, color = C.text, align = "left" }
     })
-    s:element({
+    handles.overview.gas_status_dot = s:element({
         id = "gas_status_dot",
         type = "panel",
         rect = { unit = "px", x = right_panel_x + right_panel_w - 45, y = gas_panel_y + 6, w = 5, h = 5 },
         style = { bg = gDisplayActive and C.gen_on or C.gen_off }
     })
-    s:element({
+    handles.overview.gas_status_txt = s:element({
         id = "gas_status_txt",
         type = "label",
         rect = { unit = "px", x = right_panel_x + right_panel_w - 37, y = gas_panel_y + 4, w = 30, h = 10 },
@@ -1273,7 +1335,7 @@ local function render_overview()
         props = { text = "Output:" },
         style = { font_size = 8, color = C.text_dim, align = "left" }
     })
-    s:element({
+    handles.overview.gas_power_val = s:element({
         id = "gas_power_val",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 54, y = gas_panel_y + 18, w = right_panel_w - 62, h = 10 },
@@ -1282,7 +1344,7 @@ local function render_overview()
     })
 
     local gbtn_y = gas_panel_y + 32
-    s:element({
+    handles.overview.gas_btn_on = s:element({
         id = "gas_btn_on",
         type = "button",
         rect = { unit = "px", x = right_panel_x + btn_pad, y = gbtn_y + 10, w = btn_w, h = btn_h },
@@ -1291,20 +1353,20 @@ local function render_overview()
         on_click = function()
             gasForceState = true
             save_force_states()
-            dashboard_render()
+            dashboard_render(false)
         end
     })
 
     local gas_pressure_y = gas_panel_y + gas_panel_h - btn_h - 2
     local gasCol = pct_color(gasPct)
-    s:element({
+    handles.overview.gas_debug = s:element({
         id = "gas_debug",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 8, y = gas_pressure_y - 7, w = right_panel_w - meter_w - 20, h = 10 },
         props = { text = "Pressure: " .. fmt(gasPct, 0) .. " kPa" },
         style = { font_size = 8, color = gasCol, align = "left" }
     })
-    s:element({
+    handles.overview.gas_bar = s:element({
         id = "gas_bar",
         type = "progress",
         rect = { unit = "px", x = meter_x - 15, y = gas_pressure_y - 6, w = meter_w + 20, h = 8 },
@@ -1318,7 +1380,7 @@ local function render_overview()
     local reg_btn_w = math.floor((right_panel_w - (btn_pad * 2) - (reg_btn_gap * 3)) / 4)
     local reg_btn_y = reg_label_y + 9
     local regText = presregCount == 0 and "Reg Set: N/A" or ("Reg Set: " .. fmt(presregSetting, 1) .. " kPa")
-    s:element({
+    handles.overview.presreg_setting_lbl = s:element({
         id = "presreg_setting_lbl",
         type = "label",
         rect = { unit = "px", x = right_panel_x + 8, y = reg_label_y - 3, w = right_panel_w - 16, h = 9 },
@@ -1366,7 +1428,7 @@ local function render_overview()
             adjust_presreg_setting(-0.1)
         end
     })
-    s:element({
+    handles.overview.gas_btn_off = s:element({
         id = "gas_btn_off",
         type = "button",
         rect = { unit = "px", x = right_panel_x + btn_pad + btn_w + btn_gap, y = gbtn_y + 10, w = btn_w, h = btn_h },
@@ -1375,10 +1437,10 @@ local function render_overview()
         on_click = function()
             gasForceState = false
             save_force_states()
-            dashboard_render()
+            dashboard_render(false)
         end
     })
-    s:element({
+    handles.overview.gas_btn_auto = s:element({
         id = "gas_btn_auto",
         type = "button",
         rect = { unit = "px", x = right_panel_x + btn_pad + (btn_w + btn_gap) * 2, y = gbtn_y + 10, w = btn_w, h = btn_h },
@@ -1387,7 +1449,7 @@ local function render_overview()
         on_click = function()
             gasForceState = nil
             save_force_states()
-            dashboard_render()
+            dashboard_render(false)
         end
     })
 
@@ -1398,7 +1460,7 @@ local function render_overview()
         props = { text = "GENERATION HISTORY" },
         style = { font_size = 10, color = C.text, align = "center" }
     })
-    s:element({
+    handles.overview.power_chart = s:element({
         id = "power_chart",
         type = "linechart",
         rect = { unit = "px", x = 5, y = top_bottom + history_gap + history_title_h, w = W - 10, h = history_h },
@@ -1418,6 +1480,139 @@ local function render_overview()
             font_size   = "7"
         }
     })
+end
+
+local function update_overview_dynamic()
+    if next(handles.overview) == nil then return end
+
+    local windPct = windCount > 0 and math.min(100, (windPower / windMaxpower) * 100) or 0
+    if handles.overview.wind_count ~= nil then
+        handles.overview.wind_count:set_props({ text = "Turbines: " .. windCount })
+    end
+    if handles.overview.wind_generation ~= nil then
+        handles.overview.wind_generation:set_props({ text = "Generation: " .. fmt_power(windPower) .. " / " .. fmt_power(windMaxpower) })
+    end
+    if handles.overview.wind_pct ~= nil then
+        handles.overview.wind_pct:set_props({ text = "Utilization: " .. fmt(windPct, 1) .. "%" })
+        handles.overview.wind_pct:set_style({ font_size = 9, color = pct_color(windPct), align = "left" })
+    end
+
+    if handles.overview.solar_count ~= nil then
+        handles.overview.solar_count:set_props({ text = "Panels: " .. solarCount })
+    end
+    if handles.overview.solar_tracker_status ~= nil then
+        handles.overview.solar_tracker_status:set_props({ text = mk1_Enabled and "TRACK ON" or "TRACK OFF" })
+        handles.overview.solar_tracker_status:set_style({ font_size = 7, color = mk1_Enabled and C.green or C.red, align = "right" })
+    end
+    if handles.overview.solar_generation ~= nil then
+        handles.overview.solar_generation:set_props({ text = "Generation: " .. fmt_power(solarCharge) .. " / " .. fmt_power(solarMaxCharge) })
+    end
+    if handles.overview.solar_pct ~= nil then
+        handles.overview.solar_pct:set_props({ text = "Utilization: " .. fmt(solarPct, 1) .. "%" })
+        handles.overview.solar_pct:set_style({ font_size = 9, color = pct_color(solarPct), align = "left" })
+    end
+
+    if handles.overview.bat_pct ~= nil then
+        handles.overview.bat_pct:set_props({ text = fmt(batPct, 1) .. "%" })
+        handles.overview.bat_pct:set_style({ font_size = 16, color = pct_color(batPct), align = "center" })
+    end
+    if handles.overview.bat_energy ~= nil then
+        handles.overview.bat_energy:set_props({ text = fmt_energy(batCharge) .. " / " .. fmt_energy(batMax) })
+    end
+    if handles.overview.bat_progress ~= nil then
+        handles.overview.bat_progress:set_props({ value = batPct, max = "100" })
+        handles.overview.bat_progress:set_style({ bg = "#1A2540", fill = pct_color(batPct) })
+    end
+    if handles.overview.bat_sparkline ~= nil then
+        handles.overview.bat_sparkline:set_props({ series = { batHistory }, series_colors = { pct_color(batPct) }, min = 0, max = 100 })
+    end
+
+    local sDisplayActive = solidForceState ~= nil and solidForceState or (solidOnCount > 0)
+    local solidTotal = (solidCount ~= nil and solidCount == solidCount) and solidCount or 0
+    local solidRunning = (solidOnCount ~= nil and solidOnCount == solidOnCount) and solidOnCount or 0
+    local sCountTxt = (solidTotal <= 0) and "No generators detected" or ("DETECTED: " .. solidTotal .. "  RUNNING: " .. solidRunning)
+    local solidPrefab = selected_prefab(MEM_PREFAB_SOLID)
+    local solidSlot = 0
+    if solidPrefab ~= nil then
+        solidSlot = batch_read_slot(solidPrefab, 0, LST.Quantity, LBM.Sum) or 0
+    end
+    local solidgenPct = math.min(100, (solidSlot / 1000) * 100)
+
+    if handles.overview.solid_count_lbl ~= nil then
+        handles.overview.solid_count_lbl:set_props({ text = sCountTxt })
+    end
+    if handles.overview.solid_status_dot ~= nil then
+        handles.overview.solid_status_dot:set_style({ bg = sDisplayActive and C.gen_on or C.gen_off })
+    end
+    if handles.overview.solid_status_txt ~= nil then
+        handles.overview.solid_status_txt:set_props({ text = solidCount == 0 and "N/A" or (sDisplayActive and "ON" or "OFF") })
+        handles.overview.solid_status_txt:set_style({ font_size = 8, color = sDisplayActive and C.gen_on or C.gen_off, align = "left" })
+    end
+    if handles.overview.solid_power_val ~= nil then
+        handles.overview.solid_power_val:set_props({ text = fmt_power(solidPower) })
+    end
+    if handles.overview.solid_debug ~= nil then
+        handles.overview.solid_debug:set_props({ text = "Input Quantity: " .. fmt(solidSlot, 0) })
+    end
+    if handles.overview.solid_gas_bar ~= nil then
+        handles.overview.solid_gas_bar:set_props({ value = solidgenPct, max = "100" })
+    end
+    if handles.overview.solid_btn_on ~= nil then
+        handles.overview.solid_btn_on:set_style({ bg = solidForceState == true and C.green or C.btn_on, text = "#FFFFFF", font_size = 9, gradient = "#0d0b1e", gradient_dir = "vertical" })
+    end
+    if handles.overview.solid_btn_off ~= nil then
+        handles.overview.solid_btn_off:set_style({ bg = solidForceState == false and C.red or C.btn_off, text = "#FFFFFF", font_size = 9, gradient = "#0d0b1e", gradient_dir = "vertical" })
+    end
+    if handles.overview.solid_btn_auto ~= nil then
+        handles.overview.solid_btn_auto:set_style({ bg = solidForceState == nil and C.accent or C.btn_auto, text = "#FFFFFF", font_size = 9, gradient = "#0d0b1e", gradient_dir = "vertical" })
+    end
+
+    local gDisplayActive = gasForceState ~= nil and gasForceState or (gasOnCount > 0)
+    local gCountTxt = gasCount == 0 and "No generators detected" or ("DETECTED: " .. (gasCount or "none") .. "  RUNNING: " .. (gasOnCount or "none"))
+    local gasCol = pct_color(gasPct)
+    local regText = presregCount == 0 and "Reg Set: N/A" or ("Reg Set: " .. fmt(presregSetting, 1) .. " kPa")
+
+    if handles.overview.gas_count_lbl ~= nil then
+        handles.overview.gas_count_lbl:set_props({ text = gCountTxt })
+    end
+    if handles.overview.gas_status_dot ~= nil then
+        handles.overview.gas_status_dot:set_style({ bg = gDisplayActive and C.gen_on or C.gen_off })
+    end
+    if handles.overview.gas_status_txt ~= nil then
+        handles.overview.gas_status_txt:set_props({ text = gasCount == 0 and "N/A" or (gDisplayActive and "ON" or "OFF") })
+        handles.overview.gas_status_txt:set_style({ font_size = 8, color = gDisplayActive and C.gen_on or C.gen_off, align = "left" })
+    end
+    if handles.overview.gas_power_val ~= nil then
+        handles.overview.gas_power_val:set_props({ text = fmt_power(gasPower) })
+    end
+    if handles.overview.gas_debug ~= nil then
+        handles.overview.gas_debug:set_props({ text = "Pressure: " .. fmt(gasPct, 0) .. " kPa" })
+        handles.overview.gas_debug:set_style({ font_size = 8, color = gasCol, align = "left" })
+    end
+    if handles.overview.gas_bar ~= nil then
+        handles.overview.gas_bar:set_props({ value = gasPct, max = "100" })
+    end
+    if handles.overview.presreg_setting_lbl ~= nil then
+        handles.overview.presreg_setting_lbl:set_props({ text = regText })
+    end
+    if handles.overview.gas_btn_on ~= nil then
+        handles.overview.gas_btn_on:set_style({ bg = gasForceState == true and C.green or C.btn_on, text = "#FFFFFF", font_size = 9, gradient = "#0d0b1e", gradient_dir = "vertical" })
+    end
+    if handles.overview.gas_btn_off ~= nil then
+        handles.overview.gas_btn_off:set_style({ bg = gasForceState == false and C.red or C.btn_off, text = "#FFFFFF", font_size = 9, gradient = "#0d0b1e", gradient_dir = "vertical" })
+    end
+    if handles.overview.gas_btn_auto ~= nil then
+        handles.overview.gas_btn_auto:set_style({ bg = gasForceState == nil and C.accent or C.btn_auto, text = "#FFFFFF", font_size = 9, gradient = "#0d0b1e", gradient_dir = "vertical" })
+    end
+    if handles.overview.power_chart ~= nil then
+        handles.overview.power_chart:set_props({
+            series = { windHistory, solarHistory, solidHistory, gasHistory, cableHistory },
+            series_colors = { C.blue, C.yellow, C.orange, C.green, C.red },
+            series_labels = { "Wind %", "Solar %", "Gen kW", "Gas kW", "Grid kW usage" },
+            min = 0,
+            max = historyChartMax,
+        })
+    end
 end
 
 -- ==================== SETTINGS VIEW ====================
@@ -1863,29 +2058,49 @@ end
 
 -- ==================== MAIN RENDER ====================
 
-dashboard_render = function()
+dashboard_render = function(force_rebuild)
+    if force_rebuild == nil then
+        force_rebuild = true
+    end
+
     local desired = view or "overview"
     if surfaces[desired] == nil then desired = "overview" end
     s = surfaces[desired]
-    s:clear()
 
-    s:element({
-        id = "bg",
-        type = "panel",
-        rect = { unit = "px", x = 0, y = 0, w = W, h = H },
-        style = { bg = C.bg }
-    })
+    if force_rebuild or handles.view ~= desired then
+        s:clear()
+        reset_handles()
 
-    render_header()
-    render_nav_tabs()
+        s:element({
+            id = "bg",
+            type = "panel",
+            rect = { unit = "px", x = 0, y = 0, w = W, h = H },
+            style = { bg = C.bg }
+        })
 
-    if desired == "overview" then
-        render_overview()
-    elseif desired == "settings" then
-        render_settings()
+        render_header()
+        render_nav_tabs()
+
+        if desired == "overview" then
+            render_overview()
+        elseif desired == "settings" then
+            render_settings()
+        end
+
+        render_footer()
+        handles.view = desired
+        ss.ui.activate(desired)
+        s:commit()
+        return
     end
 
-    render_footer()
+    update_header_dynamic()
+    update_nav_dynamic()
+    update_footer_dynamic()
+    if desired == "overview" then
+        update_overview_dynamic()
+    end
+
     ss.ui.activate(desired)
     s:commit()
 end
@@ -1896,7 +2111,7 @@ set_view = function(name)
     view = desired
     s = surfaces[desired]
     ss.ui.activate(desired)
-    dashboard_render()
+    dashboard_render(true)
 end
 
 -- ==================== SERIALIZATION ====================
@@ -1937,14 +2152,14 @@ while true do
     elapsed = elapsed + 1
     currenttime = util.clock_time()
 
-    -- Update auto mode state based on current readings, then apply overrides
+
     update_auto_gen_state()
     apply_solid_override()
     apply_gas_override()
     tick_solar_mk1()
 
-    -- Re-render every 4 ticks
-    if tick % 4 == 0 then
+    -- Re-render at a throttled cadence
+    if tick % LIVE_REFRESH_TICKS == 0 then
         read_wind()
         read_solar()
         read_solid_generators()
@@ -1952,7 +2167,7 @@ while true do
         read_presreg()
         read_battery()
         read_cable_analyzer()
-        dashboard_render()
+        dashboard_render(false)
     end
 
     ic.yield()
