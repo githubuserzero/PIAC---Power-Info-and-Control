@@ -706,6 +706,7 @@ local function apply_solid_override()
     batch_write(prefab, LT.On, val)
 end
 
+local last_gas_on = nil
 local function apply_gas_override()
     local prefab = selected_prefab(MEM_PREFAB_GAS)
     if prefab == nil then return end
@@ -717,7 +718,10 @@ local function apply_gas_override()
     else
         val = autoGenActive and 1 or 0
     end
-    batch_write(prefab, LT.On, val)
+    if last_gas_on ~= val then
+        batch_write(prefab, LT.On, val)
+        last_gas_on = val
+    end
 end
 
 local function adjust_presreg_setting(delta)
