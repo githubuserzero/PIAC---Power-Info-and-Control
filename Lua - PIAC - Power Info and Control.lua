@@ -52,33 +52,7 @@ local batch_write_name = ic.batch_write_name
 local batch_read_slot = ic.batch_read_slot
 
 -- ==================== PERSISTENT MEMORY MAP ====================
--- Slot 0:   solid force state  (0=auto, 1=on, 2=off)
--- Slot 1:   gas force state    (0=auto, 1=on, 2=off)
--- Slot 2:   settings_init flag
--- Slot 3:   wind max power setting (watts per turbine, default 5000)
--- Slot 4:   auto ON  wind threshold  % (default 5)
--- Slot 5:   auto ON  solar threshold % (default 5)
--- Slot 6:   auto ON  battery threshold % (default 10)
--- Slot 7:   auto OFF renewables threshold % (default 10)
--- Slot 8:   auto OFF battery threshold % (default 15)
--- Slot 9:   linechart max       (default 100)
--- Slot 10:  wind turbine       prefab_hash
--- Slot 12:  solar panel        prefab_hash
--- Slot 14:  solid generator    prefab_hash
--- Slot 16:  gas generator      prefab_hash
--- Slot 18:  pressure regulator  prefab_hash
--- Slot 19:  pressure regulator  name_hash
--- Slot 20:  battery             prefab_hash
--- Slot 22:  cable analyzer      prefab_hash
--- Slot 23:  cable analyzer      name_hash
--- Slot 32:  solar tracker MK1  panel port pos  (0-3, default 2)
--- Slot 33:  solar tracker MK1  sensor port pos (0-3, default 2)
--- Slot 34:  solar tracker MK1  pMode           (0=track,1=park,2=port)
--- Slot 35:  solar tracker MK1  low output %    (default 40)
--- Slot 36:  solar tracker MK1  low sun angle   (default 75)
--- Slot 37:  daylight sensor     prefab_hash
--- Slot 38:  daylight sensor     name_hash
--- Slot 39:  solar tracker MK1  enabled flag    (0=off, 1=on, default 1)
+
 
 
 local MEM_SOLID_FORCE   = 0
@@ -110,6 +84,7 @@ local MEM_MK1_LOW_SUN     = 36
 local MEM_PREFAB_DAYLIGHT    = 37
 local MEM_NAMEHASH_DAYLIGHT  = 38
 local MEM_MK1_ENABLED         = 39
+local MEM_REFRESH_TICKS       = 40
 
 -- ==================== DEVICE PREFAB FILTER LISTS ====================
 
@@ -152,51 +127,43 @@ local daylight_sensor_prefabs = {
 
 -- ==================== STATE ====================
 
--- Wind turbine variables
 local windPower    = 0
 local windCount    = 0
 local windMaxpower = 0
 local windMaxPowerPerTurbine = 5000
 local windHistory  = {}
 
--- Solar panel variables
 local solarCharge    = 0
 local solarMaxCharge = 0
 local solarPct       = 0
 local solarCount     = 0
 local solarHistory   = {}
 
--- Solid fuel generator variables
 local solidCount      = 0
 local solidOnCount    = 0
 local solidPower      = 0
-local solidForceState = nil  -- nil=auto, true=on, false=off
+local solidForceState = nil
 local solidHistory    = {}
 
--- Gas fuel generator variables
 local gasCount      = 0
 local gasOnCount    = 0
 local gasPower      = 0
 local gasPct        = 0
-local gasForceState = nil    -- nil=auto, true=on, false=off
+local gasForceState = nil
 local gasHistory    = {}
 
--- Pressure regulator variables
 local presregCount  = 0
 local presregSetting = 0
 local presregHistory = {}
 
--- Battery variables
 local batCharge  = 0
 local batMax     = 0
 local batPct     = 0
 local batHistory = {}
 
--- Cable analyzer variables
 local cablePower   = 0
 local cableHistory = {}
 
--- Solar Tracker MK1 config (persistent, loaded from memory on boot)
 local mk1_PanelPortPos  = 2
 local mk1_SensorPortPos = 2
 local mk1_pMode         = 0
@@ -209,7 +176,6 @@ local settings_mk1_pmode_input       = "0"
 local settings_mk1_low_output_input  = "40"
 local settings_mk1_low_sun_input     = "75"
 
--- Settings dropdown state
 local settings_dropdown_selected = {
     wind   = 0,
     solar  = 0,
@@ -233,9 +199,8 @@ local settings_dropdown_open = {
 local settings_wind_max_power_input = "5000"
 local historyChartMax = 100
 local settings_history_max_input = "100"
-local settings_subtab = "devices"  -- "devices", "power", or "solar"
+local settings_subtab = "devices"
 
--- Auto generator threshold state
 local auto_on_wind_pct   = 5
 local auto_on_solar_pct  = 5
 local auto_on_bat_pct    = 10
@@ -247,11 +212,8 @@ local settings_auto_on_solar_input  = "5"
 local settings_auto_on_bat_input    = "10"
 local settings_auto_off_ren_input   = "10"
 local settings_auto_off_bat_input   = "15"
-
--- History buffer length
 local HISTORY_LEN = 50
 
--- Initialize history buffers
 for i = 1, HISTORY_LEN do
     windHistory[i]  = 0
     solarHistory[i] = 0
@@ -330,7 +292,6 @@ local function status_text(pct)
     return "CRITICAL"
 end
 
--- Returns a color code to match the status text description
 local function status_color(pct)
     if pct >= 80 then return C.green end
     if pct >= 50 then return C.accent end
@@ -407,6 +368,10 @@ local function initialize_settings()
         settings_mk1_pmode_input       = tostring(mk1_pMode)
         settings_mk1_low_output_input  = tostring(mk1_LowOutPut)
         settings_mk1_low_sun_input     = tostring(mk1_LowSunAngle)
+        local stored_ticks = tonumber(read(MEM_REFRESH_TICKS)) or 0
+        if stored_ticks >= 1 then
+            LIVE_REFRESH_TICKS = math.min(120, stored_ticks)
+        end
         return
     end
     write(MEM_SOLID_FORCE, 0)
@@ -425,6 +390,7 @@ local function initialize_settings()
     write(MEM_MK1_LOW_OUTPUT,  40)
     write(MEM_MK1_LOW_SUN,     75)
     write(MEM_MK1_ENABLED,     1)
+    write(MEM_REFRESH_TICKS, LIVE_REFRESH_TICKS)
     windMaxPowerPerTurbine = 5000
     settings_wind_max_power_input = "5000"
     historyChartMax = 100
@@ -674,18 +640,15 @@ local function read_cable_analyzer()
     push_history(cableHistory, math.min(historyChartMax, math.max(0, cablePower / 1000)))
 end
 
--- Tracks whether auto mode currently has generators on (hysteresis state)
 local autoGenActive = false
 
 local function update_auto_gen_state()
     local wPct = windCount > 0 and math.min(100, (windPower / windMaxpower) * 100) or 0
     if not autoGenActive then
-        -- Turn ON when (wind < on_threshold OR solar < on_threshold) AND battery < on_bat
         if (wPct < auto_on_wind_pct or solarPct < auto_on_solar_pct) and batPct < auto_on_bat_pct then
             autoGenActive = true
         end
     else
-        -- Turn OFF when (wind > off_threshold OR solar > off_threshold) AND battery > off_bat
         if (wPct > auto_off_ren_pct or solarPct > auto_off_ren_pct) and batPct > auto_off_bat_pct then
             autoGenActive = false
         end
@@ -744,7 +707,10 @@ end
 
 -- ==================== SOLAR TRACKER ====================
 
+local DEBUG_LOG_ENABLED = false
+
 local function log_action(message)
+    if not DEBUG_LOG_ENABLED then return end
     local gt  = util.game_time()
     local gtH = math.floor(gt / 3600)
     local gtM = math.floor((gt % 3600) / 60)
@@ -816,10 +782,8 @@ local function mk1_track_sun(sensor)
 
     if not mk1_write_panels(hSolarA, vSolarA) then return end
 
-    -- Sun still up → keep tracking
     if sensor_v <= mk1_LowSunAngle then return end
 
-    -- Sun low: park if output dropped below threshold
     local output_pct = mk1_max_panel_output_pct()
     if output_pct < mk1_LowOutPut then
         mk1_park_panels()
@@ -844,8 +808,84 @@ local function tick_solar_mk1()
         return
     end
 
-    -- pMode 0: check switch override first
     mk1_track_sun(sensor)
+end
+
+-- ==================== SETTINGS DEVICE CACHE ====================
+
+local piac_filter_wind     = function(d) return wind_prefabs[   tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_solar    = function(d) return solar_prefabs[  tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_solid    = function(d) return solid_prefabs[  tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_gas      = function(d) return gas_prefabs[    tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_presreg  = function(d) return presreg_prefabs[tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_bat      = function(d) return battery_prefabs[tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_cable    = function(d) return cable_prefabs[  tonumber(d and d.prefab_hash) or 0] == true end
+local piac_filter_daylight = function(d) return daylight_sensor_prefabs[tonumber(d and d.prefab_hash) or 0] == true end
+
+local function build_piac_device_options(devs, predicate)
+    local options    = { "Select" }
+    local candidates = {}
+    for i, dev in ipairs(devs) do
+        if predicate == nil or predicate(dev) then
+            local label = tostring((dev and dev.display_name) or ("Device " .. tostring(i)))
+            label = label:gsub("|", "/")
+            table.insert(options, label)
+            table.insert(candidates, dev)
+        end
+    end
+    if #candidates == 0 then
+        table.insert(options, "No devices found")
+    end
+    return options, candidates
+end
+
+local function piac_selected_index_from_saved(candidates, mem_prefab, mem_namehash)
+    local saved_prefab = tonumber(read(mem_prefab)) or 0
+    local saved_namehash = mem_namehash ~= nil and (tonumber(read(mem_namehash)) or 0) or 0
+    if saved_prefab == 0 then return 0 end
+    for i, dev in ipairs(candidates) do
+        local ph = tonumber(dev and dev.prefab_hash) or 0
+        local nh = tonumber(dev and dev.name_hash) or 0
+        if ph == saved_prefab and (mem_namehash == nil or nh == saved_namehash) then
+            return i
+        end
+    end
+    return 0
+end
+
+local function piac_write_selected_device(index, candidates, mem_prefab, mem_namehash)
+    if index == 0 then
+        write(mem_prefab, 0)
+        if mem_namehash ~= nil then write(mem_namehash, 0) end
+        return
+    end
+    local picked = candidates[index]
+    if picked ~= nil then
+        write(mem_prefab, tonumber(picked.prefab_hash) or 0)
+        if mem_namehash ~= nil then write(mem_namehash, tonumber(picked.name_hash) or 0) end
+    end
+end
+
+local piac_dropdown_defs = {
+    { id = "cfg_wind",    key = "wind",    label = "Wind Turbines",      mem_prefab = MEM_PREFAB_WIND,    filter = piac_filter_wind    },
+    { id = "cfg_solar",   key = "solar",   label = "Solar Panels",       mem_prefab = MEM_PREFAB_SOLAR,   filter = piac_filter_solar   },
+    { id = "cfg_solid",   key = "solid",   label = "Solid Generators",   mem_prefab = MEM_PREFAB_SOLID,   filter = piac_filter_solid   },
+    { id = "cfg_gas",     key = "gas",     label = "Gas Generators",     mem_prefab = MEM_PREFAB_GAS,     filter = piac_filter_gas     },
+    { id = "cfg_presreg", key = "presreg", label = "Pressure Regulators",mem_prefab = MEM_PREFAB_PRESREG, mem_namehash = MEM_NAMEHASH_PRESREG, filter = piac_filter_presreg },
+    { id = "cfg_bat",     key = "bat",     label = "Batteries",          mem_prefab = MEM_PREFAB_BAT,     filter = piac_filter_bat     },
+    { id = "cfg_cable",   key = "cable",   label = "Cable Analyzer",     mem_prefab = MEM_PREFAB_CABLE,   mem_namehash = MEM_NAMEHASH_CABLE,    filter = piac_filter_cable   },
+    { id = "cfg_daylight",key = "daylight",label = "Daylight Sensor",    mem_prefab = MEM_PREFAB_DAYLIGHT, mem_namehash = MEM_NAMEHASH_DAYLIGHT, filter = piac_filter_daylight },
+}
+
+local function populate_piac_dropdown_cache()
+    local devs = device_list_safe()
+    cached_piac_dropdowns = {}
+    for _, def in ipairs(piac_dropdown_defs) do
+        local opts, cands = build_piac_device_options(devs, def.filter)
+        local sel = piac_selected_index_from_saved(cands, def.mem_prefab, def.mem_namehash)
+        cached_piac_dropdowns[def.key] = { opts = opts, candidates = cands, selected = sel }
+        settings_dropdown_selected[def.key] = sel
+    end
 end
 
 -- ==================== RENDER HELPERS ====================
@@ -1003,7 +1043,6 @@ local function render_overview()
     local history_h = math.max(64, math.floor(content_h * 0.34))
     local top_bottom = content_bottom - history_gap - history_title_h - history_h
 
-    -- ── LEFT COLUMN ──────────────────────────────────────────
 
     local wind_panel_h = 28
     s:element({
@@ -1152,7 +1191,6 @@ local function render_overview()
         }
     })
 
-    -- ── RIGHT COLUMN ─────────────────────────────────────────
 
     local right_panel_pad = 7
     local right_panel_x = right_x + right_panel_pad
@@ -1631,7 +1669,6 @@ local function render_settings()
         style = { bg = "#0A0A15" }
     })
 
-    -- Sub-tab buttons
     local stab_w = math.floor((W - 16) / 3)
     local stab_h = 20
     local stab_y = content_y + 4
@@ -1689,83 +1726,12 @@ local function render_settings()
 
     local tab_content_y = stab_y + stab_h + 4
 
-    local devices = device_list() or {}
-
-    local function build_device_options(predicate)
-        local options    = { "Select" }
-        local candidates = {}
-        for i, dev in ipairs(devices) do
-            if predicate == nil or predicate(dev) then
-                local label = tostring((dev and dev.display_name) or ("Device " .. tostring(i)))
-                label = label:gsub("|", "/")
-                table.insert(options, label)
-                table.insert(candidates, dev)
-            end
-        end
-        if #options == 1 then
-            table.insert(options, "No devices found")
-        end
-        return options, candidates
-    end
-
-    local function write_selected_device(index, candidates, mem_prefab, mem_namehash)
-        if index == 0 then
-            write(mem_prefab, 0)
-            if mem_namehash ~= nil then
-                write(mem_namehash, 0)
-            end
-            return
-        end
-        local picked = candidates[index]
-        if picked ~= nil then
-            write(mem_prefab, tonumber(picked.prefab_hash) or 0)
-            if mem_namehash ~= nil then
-                write(mem_namehash, tonumber(picked.name_hash) or 0)
-            end
-        end
-    end
-
-    local function selected_index_from_saved(candidates, mem_prefab, mem_namehash)
-        local saved_prefab = tonumber(read(mem_prefab)) or 0
-        local saved_namehash = mem_namehash ~= nil and (tonumber(read(mem_namehash)) or 0) or 0
-        if saved_prefab == 0 then return 0 end
-        for i, dev in ipairs(candidates) do
-            local ph = tonumber(dev and dev.prefab_hash) or 0
-            local nh = tonumber(dev and dev.name_hash) or 0
-            if ph == saved_prefab and (mem_namehash == nil or nh == saved_namehash) then
-                return i
-            end
-        end
-        return 0
-    end
-
-    local wind_filter    = function(d) return wind_prefabs[   tonumber(d and d.prefab_hash) or 0] == true end
-    local solar_filter   = function(d) return solar_prefabs[  tonumber(d and d.prefab_hash) or 0] == true end
-    local solid_filter   = function(d) return solid_prefabs[  tonumber(d and d.prefab_hash) or 0] == true end
-    local gas_filter     = function(d) return gas_prefabs[    tonumber(d and d.prefab_hash) or 0] == true end
-    local presreg_filter = function(d) return presreg_prefabs[tonumber(d and d.prefab_hash) or 0] == true end
-    local battery_filter = function(d) return battery_prefabs[tonumber(d and d.prefab_hash) or 0] == true end
-    local cable_filter   = function(d) return cable_prefabs[  tonumber(d and d.prefab_hash) or 0] == true end
-    local daylight_filter = function(d) return daylight_sensor_prefabs[tonumber(d and d.prefab_hash) or 0] == true end
-
-    local dropdown_defs = {
-        { id = "cfg_wind",    key = "wind",    label = "Wind Turbines",     mem_prefab = MEM_PREFAB_WIND,    filter = wind_filter    },
-        { id = "cfg_solar",   key = "solar",   label = "Solar Panels",      mem_prefab = MEM_PREFAB_SOLAR,   filter = solar_filter   },
-        { id = "cfg_solid",   key = "solid",   label = "Solid Generators",  mem_prefab = MEM_PREFAB_SOLID,   filter = solid_filter   },
-        { id = "cfg_gas",     key = "gas",     label = "Gas Generators",    mem_prefab = MEM_PREFAB_GAS,     filter = gas_filter     },
-        { id = "cfg_presreg", key = "presreg", label = "Pressure Regulators",mem_prefab = MEM_PREFAB_PRESREG, mem_namehash = MEM_NAMEHASH_PRESREG, filter = presreg_filter },
-        { id = "cfg_bat",     key = "bat",     label = "Batteries",        mem_prefab = MEM_PREFAB_BAT,     filter = battery_filter },
-        { id = "cfg_cable",   key = "cable",   label = "Cable Analyzer",   mem_prefab = MEM_PREFAB_CABLE,   mem_namehash = MEM_NAMEHASH_CABLE, filter = cable_filter   },
-        { id = "cfg_daylight",key = "daylight",label = "Daylight Sensor",  mem_prefab = MEM_PREFAB_DAYLIGHT, mem_namehash = MEM_NAMEHASH_DAYLIGHT, filter = daylight_filter },
-    }
-
     local lbl_x   = 18
     local inp_x   = 190
     local inp_w   = W - inp_x - 20
     local row_h   = 26
 
     if settings_subtab == "devices" then
-        -- ── DEVICES SUB-TAB ──────────────────────────────────────
         s:element({
             id = "settings_hint",
             type = "label",
@@ -1778,11 +1744,13 @@ local function render_settings()
         local dd_x   = 140
         local dd_w   = W - dd_x - 20
 
-        for i, def in ipairs(dropdown_defs) do
+        for i, def in ipairs(piac_dropdown_defs) do
             local y = base_y + (i - 1) * row_h
-            local options, candidates = build_device_options(def.filter)
-            local sel_idx = selected_index_from_saved(candidates, def.mem_prefab, def.mem_namehash)
-            settings_dropdown_selected[def.key] = sel_idx
+            if cached_piac_dropdowns == nil then
+                populate_piac_dropdown_cache()
+            end
+            local cache_entry = cached_piac_dropdowns[def.key] or { opts = { "Select" }, candidates = {}, selected = 0 }
+            settings_dropdown_selected[def.key] = cache_entry.selected
             s:element({
                 id = def.id .. "_label",
                 type = "label",
@@ -1795,17 +1763,24 @@ local function render_settings()
                 type = "select",
                 rect = { unit = "px", x = dd_x, y = y, w = dd_w, h = 22 },
                 props = {
-                    options  = table.concat(options, "|"),
+                    options  = table.concat(cache_entry.opts, "|"),
                     selected = settings_dropdown_selected[def.key],
                     open     = settings_dropdown_open[def.key],
                 },
                 on_toggle = function()
+                    if cached_piac_dropdowns == nil then
+                        populate_piac_dropdown_cache()
+                    end
                     settings_dropdown_open[def.key] = settings_dropdown_open[def.key] == "true" and "false" or "true"
                     dashboard_render()
                 end,
                 on_change = function(optionIndex)
-                    settings_dropdown_selected[def.key] = tonumber(optionIndex) or 0
-                    write_selected_device(settings_dropdown_selected[def.key], candidates, def.mem_prefab, def.mem_namehash)
+                    local sel = tonumber(optionIndex) or 0
+                    settings_dropdown_selected[def.key] = sel
+                    if cached_piac_dropdowns and cached_piac_dropdowns[def.key] then
+                        cached_piac_dropdowns[def.key].selected = sel
+                    end
+                    piac_write_selected_device(sel, cache_entry.candidates, def.mem_prefab, def.mem_namehash)
                     settings_dropdown_open[def.key] = "false"
                     dashboard_render()
                 end
@@ -1815,16 +1790,33 @@ local function render_settings()
         s:element({
             id = "settings_note",
             type = "label",
-            rect = { unit = "px", x = lbl_x, y = base_y + #dropdown_defs * row_h + 6, w = W - 36, h = 20 },
+            rect = { unit = "px", x = lbl_x, y = base_y + #piac_dropdown_defs * row_h + 6, w = W - 36, h = 20 },
             props = { text = "NOTE: No selection = no read/write for that system. Named devices require prefab + name." },
             style = { font_size = 7, color = C.text_muted, align = "left" }
         })
 
+        s:element({
+            id = "refresh_ticks_label",
+            type = "label",
+            rect = { unit = "px", x = lbl_x, y = base_y + #piac_dropdown_defs * row_h + 30, w = inp_x - lbl_x - 4, h = 20 },
+            props = { text = "Refresh Ticks (1-120):" },
+            style = { font_size = 9, color = "#94A3B8", align = "left" }
+        })
+        s:element({
+            id = "refresh_ticks_input",
+            type = "textinput",
+            rect = { unit = "px", x = inp_x, y = base_y + #piac_dropdown_defs * row_h + 30, w = 60, h = 20 },
+            props = { value = tostring(LIVE_REFRESH_TICKS), placeholder = "6" },
+            on_change = function(new_value)
+                local n = math.max(1, math.min(120, tonumber(new_value) or LIVE_REFRESH_TICKS))
+                LIVE_REFRESH_TICKS = n
+                write(MEM_REFRESH_TICKS, n)
+            end
+        })
+
     elseif settings_subtab == "power" then
-        -- ── POWER & AUTO SUB-TAB ─────────────────────────────────
         local cy = tab_content_y
 
-        -- Wind max power
         s:element({
             id = "pwr_title",
             type = "label",
@@ -1878,7 +1870,6 @@ local function render_settings()
             end
         })
 
-        -- Auto thresholds
         local auto_title_y = cy + 68
         s:element({
             id = "auto_title",
@@ -1931,7 +1922,6 @@ local function render_settings()
         end
 
     else
-        -- ── SOLAR TRACKER MK1 ────────────────────────────────────
         local cy = tab_content_y
         local mk1_btn_y = cy
         local mk1_status_col = mk1_Enabled and C.green or C.red
@@ -2146,6 +2136,7 @@ end
 
 initialize_settings()
 load_force_states()
+populate_piac_dropdown_cache()
 set_view(view)
 
 -- ==================== MAIN LOOP ====================
@@ -2162,7 +2153,6 @@ while true do
     apply_gas_override()
     tick_solar_mk1()
 
-    -- Re-render at a throttled cadence
     if tick % LIVE_REFRESH_TICKS == 0 then
         read_wind()
         read_solar()
